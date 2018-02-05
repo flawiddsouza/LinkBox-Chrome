@@ -1,0 +1,27 @@
+{
+    "name": "LinkBox",
+    "version": "1.0.1",
+    "description": "Web based alternative to OneTab",
+    "permissions": [
+        "http://128.199.204.21/",
+        "notifications",
+        "tabs",
+        "contextMenus"
+    ],
+    "background": {
+        "scripts": ["reconnecting-websocket.js", "background.js"]
+    },
+    "browser_action": {},
+    "commands": {
+        "display-linkbox": {
+            "description": "Display LinkBox"
+        },
+        "send-current-tab-to-linkbox": {
+            "description": "Send the current tab to LinkBox"
+        }
+    },
+    "icons": {
+        "128": "icon-large.png"
+    },
+    "manifest_version": 2
+}

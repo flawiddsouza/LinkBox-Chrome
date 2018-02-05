@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Login to LinkBox</title>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Open+Sans:300,400,600">
+        <link rel="stylesheet" href="login.css">
+        <script src="login.js" defer></script>
+    </head>
+    <body>
+        <header><h1>LinkBox</h1></header>
+        <main class="login">
+            <div class="message is-danger" style="display:none">
+                <div class="message-header">Error!</div>
+                <div class="message-body"></div>
+            </div>
+            <form>
+                <label class="label" for="username">Username</label>
+                <input type="text" id="username">
+                <label class="label" for="password">Password</label>
+                <input type="password" id="password">
+                <button type="submit" id="loginButton">Login</button>
+            </form>
+        </main>
+    </body>
+</html>
