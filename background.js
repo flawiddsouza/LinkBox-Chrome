@@ -188,8 +188,6 @@ function sendCurrentTabToLinkBox() {
 
     chrome.tabs.query({ currentWindow: true, active: true }, tabs => {
         var tab = tabs[0]
-        var hasLinkBox = false
-        var linkBoxTabId = null
         var link = {}
 
         if(!RegExp(`${baseURL}.*`).test(tab.url) && !RegExp(/^chrome.*/).test(tab.url)) { // we avoid adding & closing LinkBox if it's open in the window
@@ -198,35 +196,21 @@ function sendCurrentTabToLinkBox() {
             return
         }
 
-        chrome.tabs.getAllInWindow(null, tabs => {
-            tabs.forEach(tab => {
-                if(RegExp(`${baseURL}.*`).test(tab.url)) {
-                    hasLinkBox = true
-                    linkBoxTabId = tab.id
-                }
+        if(ws.readyState === WebSocket.OPEN) {
+            addLink(link.title, link.link)
+            chrome.tabs.remove(tab.id)
+        } else if(ws.readyState === WebSocket.CLOSED) {
+            chrome.notifications.create({
+                type : 'basic',
+                iconUrl: 'icon-large.png',
+                title: 'Error',
+                message: "LinkBox server is offline"
             })
-
-            if(ws.readyState === WebSocket.OPEN) {
-                addLink(link.title, link.link)
-                if(!hasLinkBox) { // open tab only if LinkBox isn't open in any tab
-                    chrome.tabs.create({ url: `${webProtocol}://${baseURL}` })
-                } else { // set focus to the LinkBox tab
-                    chrome.tabs.update(linkBoxTabId, { active: true })
-                }
-                chrome.tabs.remove(tab.id)
-            } else if(ws.readyState === WebSocket.CLOSED) {
-                chrome.notifications.create({
-                    type : 'basic',
-                    iconUrl: 'icon-large.png',
-                    title: 'Error',
-                    message: "LinkBox server is offline"
-                })
-                // addLinksWhileOffline([link])
-                // chrome.tabs.remove(tab.id)
-            } else {
-                console.log("WebSocket is in state CONNECTING or CLOSING")
-            }
-        })
+            // addLinksWhileOffline([link])
+            // chrome.tabs.remove(tab.id)
+        } else {
+            console.log("WebSocket is in state CONNECTING or CLOSING")
+        }
     })
 }
 

@@ -1,6 +1,6 @@
 {
     "name": "LinkBox",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "description": "Web based alternative to OneTab",
     "permissions": [
         "http://128.199.204.21/",
