@@ -1,9 +1,9 @@
 {
     "name": "LinkBox",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "description": "Web based alternative to OneTab",
     "permissions": [
-        "http://128.199.204.21/",
+        "https://linkbox.artelin.dev/",
         "notifications",
         "tabs",
         "contextMenus"

@@ -1,6 +1,6 @@
-const baseURL = '128.199.204.21:9886'
-const socketProtocol = 'ws'
-const webProtocol = 'http'
+const baseURL = 'linkbox.artelin.dev'
+const socketProtocol = 'wss'
+const webProtocol = 'https'
 
 const ws = new ReconnectingWebSocket(`${socketProtocol}://${baseURL}`)
 
@@ -171,12 +171,12 @@ function sendAllTabsToLinkBox() {
                 type : 'basic',
                 iconUrl: 'icon-large.png',
                 title: 'Error',
-                message: "LinkBox server is offline"
+                message: 'LinkBox server is offline'
             })
             // addLinksWhileOffline(links)
             // chrome.tabs.remove(tabIds)
         } else {
-            console.log("WebSocket is in state CONNECTING or CLOSING")
+            console.log('WebSocket is in state CONNECTING or CLOSING')
         }
     })
 }
@@ -204,12 +204,12 @@ function sendCurrentTabToLinkBox() {
                 type : 'basic',
                 iconUrl: 'icon-large.png',
                 title: 'Error',
-                message: "LinkBox server is offline"
+                message: 'LinkBox server is offline'
             })
             // addLinksWhileOffline([link])
             // chrome.tabs.remove(tab.id)
         } else {
-            console.log("WebSocket is in state CONNECTING or CLOSING")
+            console.log('WebSocket is in state CONNECTING or CLOSING')
         }
     })
 }
@@ -251,12 +251,12 @@ function sendAllTabsExceptCurrentTabToLinkBox() {
                 type : 'basic',
                 iconUrl: 'icon-large.png',
                 title: 'Error',
-                message: "LinkBox server is offline"
+                message: 'LinkBox server is offline'
             })
             // addLinksWhileOffline(links)
             // chrome.tabs.remove(tabIds)
         } else {
-            console.log("WebSocket is in state CONNECTING or CLOSING")
+            console.log('WebSocket is in state CONNECTING or CLOSING')
         }
     })
 }
@@ -305,12 +305,12 @@ function sendTabsOnTheLeftToLinkBox() {
                 type : 'basic',
                 iconUrl: 'icon-large.png',
                 title: 'Error',
-                message: "LinkBox server is offline"
+                message: 'LinkBox server is offline'
             })
             // addLinksWhileOffline(links)
             // chrome.tabs.remove(tabIds)
         } else {
-            console.log("WebSocket is in state CONNECTING or CLOSING")
+            console.log('WebSocket is in state CONNECTING or CLOSING')
         }
     })
 }
@@ -359,12 +359,12 @@ function sendTabsOnTheRightToLinkBox() {
                 type : 'basic',
                 iconUrl: 'icon-large.png',
                 title: 'Error',
-                message: "LinkBox server is offline"
+                message: 'LinkBox server is offline'
             })
             // addLinksWhileOffline(links)
             // chrome.tabs.remove(tabIds)
         } else {
-            console.log("WebSocket is in state CONNECTING or CLOSING")
+            console.log('WebSocket is in state CONNECTING or CLOSING')
         }
     })
 }
@@ -399,11 +399,11 @@ function handleTabChange() {
             tabs.forEach((tab, index) => {
                 if(index === currentTabIndex - 1) {
                     tabOnLeft = true
-                    // console.log("There's a tab on the left")
+                    // console.log('There\'s a tab on the left')
                 }
                 if(index === currentTabIndex + 1) {
                     tabOnRight = true
-                    // console.log("There's a tab on the right")
+                    // console.log('There\'s a tab on the right')
                 }
             })
             if(!tabOnLeft) {
@@ -439,7 +439,7 @@ function setupLogoutContextMenu() {
                 type : 'basic',
                 iconUrl: 'icon-large.png',
                 title: 'Success',
-                message: "Logged out"
+                message: 'Logged out'
             })
             removeLogoutContextMenus()
         }
@@ -560,7 +560,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             type : 'basic',
             iconUrl: 'icon-large.png',
             title: 'Success',
-            message: "Logged in"
+            message: 'Logged in'
         })
 
         setupLogoutContextMenu()
