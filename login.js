@@ -1,4 +1,4 @@
-const baseURL = 'http://128.199.204.21:9886'
+const baseURL = 'https://linkbox.artelin.dev'
 
 var username = document.getElementById('username')
 var password = document.getElementById('password')
