@@ -20,11 +20,14 @@ loginButton.addEventListener('click', e => {
     .then(res => res.json())
     .then(res => {
         if(res.success) {
-            localStorage.setItem('authToken', res.token)
-            localStorage.setItem('username', username.value)
-            localStorage.setItem('password', password.value)
-            chrome.runtime.sendMessage({ message: 'loggedIn'})
-            chrome.tabs.getCurrent(tab => chrome.tabs.remove(tab.id))
+            chrome.storage.local.set({
+                authToken: res.token,
+                username: username.value,
+                password: password.value
+            }, () => {
+                chrome.runtime.sendMessage({ message: 'loggedIn'})
+                chrome.tabs.getCurrent(tab => chrome.tabs.remove(tab.id))
+            })
         } else {
             messageBody.innerHTML = res.message
             messageBox.style.display = 'block'

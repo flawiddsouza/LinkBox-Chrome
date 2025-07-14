@@ -1,17 +1,22 @@
 {
     "name": "LinkBox",
-    "version": "1.0.4",
+    "version": "1.0.5",
     "description": "Web based alternative to OneTab",
+    "manifest_version": 3,
     "permissions": [
-        "https://linkbox.artelin.dev/",
         "notifications",
         "tabs",
-        "contextMenus"
+        "contextMenus",
+        "storage"
+    ],
+    "host_permissions": [
+        "https://linkbox.artelin.dev/"
     ],
     "background": {
-        "scripts": ["reconnecting-websocket.js", "background.js"]
+        "service_worker": "background.js",
+        "type": "module"
     },
-    "browser_action": {},
+    "action": {},
     "commands": {
         "display-linkbox": {
             "description": "Display LinkBox"
@@ -22,6 +27,5 @@
     },
     "icons": {
         "128": "icon-large.png"
-    },
-    "manifest_version": 2
+    }
 }

@@ -1,3 +1,5 @@
+import { ReconnectingWebSocket } from './reconnecting-websocket.js'
+
 const baseURL = 'linkbox.artelin.dev'
 const socketProtocol = 'wss'
 const webProtocol = 'https'
@@ -6,13 +8,42 @@ const ws = new ReconnectingWebSocket(`${socketProtocol}://${baseURL}`)
 
 auth()
 
-var linksAddedWhileOffline = []
-
-if(localStorage.getItem('linksAddedWhileOffline')) {
-    linksAddedWhileOffline = JSON.parse(localStorage.getItem('linksAddedWhileOffline'))
-} else {
-    localStorage.setItem('linksAddedWhileOffline', JSON.stringify(linksAddedWhileOffline))
+function isStorageAvailable() {
+    return typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local
 }
+
+async function getFromStorage(key) {
+    if (!isStorageAvailable()) {
+        throw new Error('chrome.storage.local is not available in this context.')
+    }
+    return (await chrome.storage.local.get([key]))[key]
+}
+async function setInStorage(key, value) {
+    if (!isStorageAvailable()) {
+        throw new Error('chrome.storage.local is not available in this context.')
+    }
+    await chrome.storage.local.set({ [key]: value })
+}
+async function clearStorage() {
+    if (!isStorageAvailable()) {
+        throw new Error('chrome.storage.local is not available in this context.')
+    }
+    await chrome.storage.local.clear()
+}
+
+let linksAddedWhileOffline = []
+;(async () => {
+    try {
+        const storedLinks = await getFromStorage('linksAddedWhileOffline')
+        if (storedLinks) {
+            linksAddedWhileOffline = JSON.parse(storedLinks)
+        } else {
+            await setInStorage('linksAddedWhileOffline', JSON.stringify(linksAddedWhileOffline))
+        }
+    } catch (err) {
+        console.error('Storage error:', err)
+    }
+})()
 
 ws.addEventListener('message', e => {
     try {
@@ -43,9 +74,9 @@ function onNeedValidToken(payload) {
     }
 }
 
-function wsSendJSON(obj) {
-    if(ws.readyState === WebSocket.OPEN) {
-        var authToken = localStorage.getItem('authToken')
+async function wsSendJSON(obj) {
+    if (ws.readyState === WebSocket.OPEN) {
+        const authToken = await getFromStorage('authToken')
         Object.assign(obj, { authToken: authToken }) // attach authToken to the send
         ws.send(JSON.stringify(obj))
     } else {
@@ -61,17 +92,17 @@ function addLinks(linkArray) {
     wsSendJSON({ method: 'add-links', payload: linkArray })
 }
 
-function addLinksWhileOffline(links) {
+async function addLinksWhileOffline(links) {
     linksAddedWhileOffline.push(links)
-    localStorage.setItem('linksAddedWhileOffline', JSON.stringify(linksAddedWhileOffline))
+    await setInStorage('linksAddedWhileOffline', JSON.stringify(linksAddedWhileOffline))
 }
 
-function auth(openLogin = true) {
-    var username = localStorage.getItem('username')
-    var password = localStorage.getItem('password')
+async function auth(openLogin = true) {
+    const username = await getFromStorage('username')
+    const password = await getFromStorage('password')
 
-    if(!username || !password) {
-        if(openLogin) {
+    if (!username || !password) {
+        if (openLogin) {
             chrome.tabs.create({ url: 'login.html' })
         }
         return false
@@ -80,13 +111,12 @@ function auth(openLogin = true) {
     }
 }
 
-function loginUser(callback = null) {
-    if(!auth()) {
+async function loginUser(callback = null) {
+    if (!(await auth())) {
         return
     }
-
-    var username = localStorage.getItem('username')
-    var password = localStorage.getItem('password')
+    const username = await getFromStorage('username')
+    const password = await getFromStorage('password')
 
     fetch(`${webProtocol}://${baseURL}/authenticate`, {
         method: 'post',
@@ -97,10 +127,10 @@ function loginUser(callback = null) {
         body: JSON.stringify({ username: username, password: password })
     })
     .then(res => res.json())
-    .then(res => {
-        if(res.success) {
-            localStorage.setItem('authToken', res.token)
-            if(callback) {
+    .then(async res => {
+        if (res.success) {
+            await setInStorage('authToken', res.token)
+            if (callback) {
                 callback()
             }
         } else {
@@ -141,7 +171,7 @@ function sendAllTabsToLinkBox() {
         return
     }
 
-    chrome.tabs.getAllInWindow(null, tabs => {
+    chrome.tabs.query({ currentWindow: true }, tabs => {
         var links = []
         var tabIds = []
         var hasLinkBox = false
@@ -219,7 +249,7 @@ function sendAllTabsExceptCurrentTabToLinkBox() {
         return
     }
 
-    chrome.tabs.getAllInWindow(null, tabs => {
+    chrome.tabs.query({ currentWindow: true }, tabs => {
         var links = []
         var tabIds = []
         var hasLinkBox = false
@@ -266,7 +296,7 @@ function sendTabsOnTheLeftToLinkBox() {
         return
     }
 
-    chrome.tabs.getAllInWindow(null, tabs => {
+    chrome.tabs.query({ currentWindow: true }, tabs => {
         var links = []
         var tabIds = []
         var hasLinkBox = false
@@ -320,7 +350,7 @@ function sendTabsOnTheRightToLinkBox() {
         return
     }
 
-    chrome.tabs.getAllInWindow(null, tabs => {
+    chrome.tabs.query({ currentWindow: true }, tabs => {
         var links = []
         var tabIds = []
         var hasLinkBox = false
@@ -370,7 +400,7 @@ function sendTabsOnTheRightToLinkBox() {
 }
 
 function handleTabChange() {
-    chrome.tabs.getAllInWindow(null, tabs => {
+    chrome.tabs.query({ currentWindow: true }, tabs => {
         if(tabs.length == 1) {
             chrome.contextMenus.update('sendAllTabsExceptThisTabToLinkBox', { enabled: false })
             chrome.contextMenus.update('sendTabsOnTheLeftToLinkBox', { enabled: false })
@@ -420,29 +450,19 @@ function handleTabChange() {
     })
 }
 
-function setupLogoutContextMenu() {
+async function setupLogoutContextMenu() {
     chrome.contextMenus.create({
         id: 'LogoutSeparator',
         type: 'separator',
         parentId: 'LinkBox',
-        contexts: ['browser_action']
+        contexts: ['action']
     })
 
     chrome.contextMenus.create({
         id: 'Logout',
         title: 'Logout',
         parentId: 'LinkBox',
-        contexts: ['browser_action'],
-        onclick: info => {
-            localStorage.clear()
-            chrome.notifications.create({
-                type : 'basic',
-                iconUrl: 'icon-large.png',
-                title: 'Success',
-                message: 'Logged out'
-            })
-            removeLogoutContextMenus()
-        }
+        contexts: ['action']
     })
 }
 
@@ -462,7 +482,7 @@ chrome.commands.onCommand.addListener(command => {
     }
 })
 
-chrome.browserAction.onClicked.addListener(activeTab => sendAllTabsToLinkBox())
+chrome.action.onClicked.addListener(activeTab => sendAllTabsToLinkBox())
 
 chrome.contextMenus.removeAll()
 
@@ -473,34 +493,28 @@ chrome.contextMenus.create({
 })
 
 chrome.contextMenus.create({
+    id: 'displayLinkBox',
     title: 'Display LinkBox',
     parentId: 'LinkBox',
-    contexts: ['all'],
-    onclick: () => {
-        displayLinkBox()
-    }
+    contexts: ['all']
 })
 
 chrome.contextMenus.create({
     id: 'sendAllTabsToLinkBox',
     title: 'Send all tabs to LinkBox',
     parentId: 'LinkBox',
-    contexts: ['all'],
-    onclick: () => {
-        sendAllTabsToLinkBox()
-    }
+    contexts: ['all']
 })
 
 chrome.contextMenus.create({
+    id: 'sendWebLinkToLinkBox',
     title: 'Send this web link to LinkBox',
     parentId: 'LinkBox',
-    contexts: ['link'],
-    onclick: info => {
-        console.log(info)
-    }
+    contexts: ['link']
 })
 
 chrome.contextMenus.create({
+    id: 'separator1',
     type: 'separator',
     parentId: 'LinkBox',
     contexts: ['all']
@@ -510,40 +524,28 @@ chrome.contextMenus.create({
     id: 'sendOnlyThisTabToLinkBox',
     title: 'Send only this tab to LinkBox',
     parentId: 'LinkBox',
-    contexts: ['all'],
-    onclick: info => {
-        sendCurrentTabToLinkBox()
-    }
+    contexts: ['all']
 })
 
 chrome.contextMenus.create({
     id: 'sendAllTabsExceptThisTabToLinkBox',
     title: 'Send all tabs except this tab to LinkBox',
     parentId: 'LinkBox',
-    contexts: ['all'],
-    onclick: info => {
-        sendAllTabsExceptCurrentTabToLinkBox()
-    }
+    contexts: ['all']
 })
 
 chrome.contextMenus.create({
     id: 'sendTabsOnTheLeftToLinkBox',
     title: 'Send tabs on the left to LinkBox',
     parentId: 'LinkBox',
-    contexts: ['all'],
-    onclick: info => {
-        sendTabsOnTheLeftToLinkBox()
-    }
+    contexts: ['all']
 })
 
 chrome.contextMenus.create({
     id: 'sendTabsOnTheRightToLinkBox',
     title: 'Send tabs on the right to LinkBox',
     parentId: 'LinkBox',
-    contexts: ['all'],
-    onclick: info => {
-        sendTabsOnTheRightToLinkBox()
-    }
+    contexts: ['all']
 })
 
 if(auth(false)) {
@@ -564,5 +566,45 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         })
 
         setupLogoutContextMenu()
+    }
+})
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+    switch (info.menuItemId) {
+        case 'displayLinkBox':
+            displayLinkBox()
+            break
+        case 'sendAllTabsToLinkBox':
+            sendAllTabsToLinkBox()
+            break
+        case 'sendWebLinkToLinkBox':
+            console.log(info)
+            break
+        case 'sendOnlyThisTabToLinkBox':
+            sendCurrentTabToLinkBox()
+            break
+        case 'sendAllTabsExceptThisTabToLinkBox':
+            sendAllTabsExceptCurrentTabToLinkBox()
+            break
+        case 'sendTabsOnTheLeftToLinkBox':
+            sendTabsOnTheLeftToLinkBox()
+            break
+        case 'sendTabsOnTheRightToLinkBox':
+            sendTabsOnTheRightToLinkBox()
+            break
+        case 'Logout':
+            (async () => {
+                await clearStorage()
+                chrome.notifications.create({
+                    type : 'basic',
+                    iconUrl: 'icon-large.png',
+                    title: 'Success',
+                    message: 'Logged out'
+                })
+                removeLogoutContextMenus()
+            })()
+            break
+        default:
+            break
     }
 })
