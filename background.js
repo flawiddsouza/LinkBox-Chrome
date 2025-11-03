@@ -45,6 +45,9 @@ let linksAddedWhileOffline = []
     }
 })()
 
+// Store pending tab closures waiting for confirmation
+const pendingTabClosures = new Map()
+
 ws.addEventListener('message', e => {
     try {
         var receivedJSON = JSON.parse(e.data)
@@ -54,6 +57,10 @@ ws.addEventListener('message', e => {
             switch(event) {
                 case 'need-valid-token':
                     onNeedValidToken(payload)
+                    break
+                case 'link-added':
+                case 'links-added':
+                    onLinksAdded(payload)
                     break
             }
         }
@@ -65,6 +72,15 @@ ws.addEventListener('message', e => {
         }
     }
 })
+
+function onLinksAdded(payload) {
+    // When we get confirmation that links were added, close the tabs
+    if (payload && payload.requestId && pendingTabClosures.has(payload.requestId)) {
+        const tabIds = pendingTabClosures.get(payload.requestId)
+        chrome.tabs.remove(tabIds)
+        pendingTabClosures.delete(payload.requestId)
+    }
+}
 
 function onNeedValidToken(payload) {
     if(payload) {
@@ -78,18 +94,24 @@ async function wsSendJSON(obj) {
     if (ws.readyState === WebSocket.OPEN) {
         const authToken = await getFromStorage('authToken')
         Object.assign(obj, { authToken: authToken }) // attach authToken to the send
+        // Generate a unique request ID for tracking confirmations
+        if (!obj.requestId && (obj.method === 'add-link' || obj.method === 'add-links')) {
+            obj.requestId = `${Date.now()}-${Math.random()}`
+        }
         ws.send(JSON.stringify(obj))
+        return obj.requestId
     } else {
         console.log('wsSendJSON failed because WebSocket is not open')
+        return null
     }
 }
 
 function addLink(title, link) {
-    wsSendJSON({ method: 'add-link', payload: { title: title, link: link } })
+    return wsSendJSON({ method: 'add-link', payload: { title: title, link: link } })
 }
 
 function addLinks(linkArray) {
-    wsSendJSON({ method: 'add-links', payload: linkArray })
+    return wsSendJSON({ method: 'add-links', payload: linkArray })
 }
 
 async function addLinksWhileOffline(links) {
@@ -171,7 +193,7 @@ function sendAllTabsToLinkBox() {
         return
     }
 
-    chrome.tabs.query({ currentWindow: true }, tabs => {
+    chrome.tabs.query({ currentWindow: true }, async tabs => {
         var links = []
         var tabIds = []
         var hasLinkBox = false
@@ -189,12 +211,19 @@ function sendAllTabsToLinkBox() {
         })
 
         if(ws.readyState === WebSocket.OPEN) {
-            addLinks(links)
-            chrome.tabs.remove(tabIds)
-            if(!hasLinkBox) { // open tab only if LinkBox isn't open in any tab
-                chrome.tabs.create({ url: `${webProtocol}://${baseURL}` })
-            } else { // set focus to the LinkBox tab
+            // Open LinkBox first to prevent closing the window
+            if(!hasLinkBox) {
+                const linkBoxTab = await chrome.tabs.create({ url: `${webProtocol}://${baseURL}` })
+                linkBoxTabId = linkBoxTab.id
+            } else {
+                // Set focus to the LinkBox tab
                 chrome.tabs.update(linkBoxTabId, { active: true })
+            }
+            
+            // Send links and store tab IDs for later closure upon confirmation
+            const requestId = await addLinks(links)
+            if (requestId && tabIds.length > 0) {
+                pendingTabClosures.set(requestId, tabIds)
             }
         } else if(ws.readyState === WebSocket.CLOSED) {
             chrome.notifications.create({
@@ -216,7 +245,7 @@ function sendCurrentTabToLinkBox() {
         return
     }
 
-    chrome.tabs.query({ currentWindow: true, active: true }, tabs => {
+    chrome.tabs.query({ currentWindow: true, active: true }, async tabs => {
         var tab = tabs[0]
         var link = {}
 
@@ -227,8 +256,11 @@ function sendCurrentTabToLinkBox() {
         }
 
         if(ws.readyState === WebSocket.OPEN) {
-            addLink(link.title, link.link)
-            chrome.tabs.remove(tab.id)
+            // Send link and store tab ID for later closure upon confirmation
+            const requestId = await addLink(link.title, link.link)
+            if (requestId) {
+                pendingTabClosures.set(requestId, [tab.id])
+            }
         } else if(ws.readyState === WebSocket.CLOSED) {
             chrome.notifications.create({
                 type : 'basic',
@@ -249,7 +281,7 @@ function sendAllTabsExceptCurrentTabToLinkBox() {
         return
     }
 
-    chrome.tabs.query({ currentWindow: true }, tabs => {
+    chrome.tabs.query({ currentWindow: true }, async tabs => {
         var links = []
         var tabIds = []
         var hasLinkBox = false
@@ -269,12 +301,19 @@ function sendAllTabsExceptCurrentTabToLinkBox() {
         })
 
         if(ws.readyState === WebSocket.OPEN) {
-            addLinks(links)
-            chrome.tabs.remove(tabIds)
-            if(!hasLinkBox) { // open tab only if LinkBox isn't open in any tab
-                chrome.tabs.create({ url: `${webProtocol}://${baseURL}` })
-            } else { // set focus to the LinkBox tab
+            // Open LinkBox first to prevent closing the window
+            if(!hasLinkBox) {
+                const linkBoxTab = await chrome.tabs.create({ url: `${webProtocol}://${baseURL}` })
+                linkBoxTabId = linkBoxTab.id
+            } else {
+                // Set focus to the LinkBox tab
                 chrome.tabs.update(linkBoxTabId, { active: true })
+            }
+            
+            // Send links and store tab IDs for later closure upon confirmation
+            const requestId = await addLinks(links)
+            if (requestId && tabIds.length > 0) {
+                pendingTabClosures.set(requestId, tabIds)
             }
         } else if(ws.readyState === WebSocket.CLOSED) {
             chrome.notifications.create({
@@ -296,7 +335,7 @@ function sendTabsOnTheLeftToLinkBox() {
         return
     }
 
-    chrome.tabs.query({ currentWindow: true }, tabs => {
+    chrome.tabs.query({ currentWindow: true }, async tabs => {
         var links = []
         var tabIds = []
         var hasLinkBox = false
@@ -323,12 +362,19 @@ function sendTabsOnTheLeftToLinkBox() {
         })
 
         if(ws.readyState === WebSocket.OPEN) {
-            addLinks(links)
-            chrome.tabs.remove(tabIds)
-            if(!hasLinkBox) { // open tab only if LinkBox isn't open in any tab
-                chrome.tabs.create({ url: `${webProtocol}://${baseURL}` })
-            } else { // set focus to the LinkBox tab
+            // Open LinkBox first to prevent closing the window
+            if(!hasLinkBox) {
+                const linkBoxTab = await chrome.tabs.create({ url: `${webProtocol}://${baseURL}` })
+                linkBoxTabId = linkBoxTab.id
+            } else {
+                // Set focus to the LinkBox tab
                 chrome.tabs.update(linkBoxTabId, { active: true })
+            }
+            
+            // Send links and store tab IDs for later closure upon confirmation
+            const requestId = await addLinks(links)
+            if (requestId && tabIds.length > 0) {
+                pendingTabClosures.set(requestId, tabIds)
             }
         } else if(ws.readyState === WebSocket.CLOSED) {
             chrome.notifications.create({
@@ -350,7 +396,7 @@ function sendTabsOnTheRightToLinkBox() {
         return
     }
 
-    chrome.tabs.query({ currentWindow: true }, tabs => {
+    chrome.tabs.query({ currentWindow: true }, async tabs => {
         var links = []
         var tabIds = []
         var hasLinkBox = false
@@ -377,12 +423,19 @@ function sendTabsOnTheRightToLinkBox() {
         })
 
         if(ws.readyState === WebSocket.OPEN) {
-            addLinks(links)
-            chrome.tabs.remove(tabIds)
-            if(!hasLinkBox) { // open tab only if LinkBox isn't open in any tab
-                chrome.tabs.create({ url: `${webProtocol}://${baseURL}` })
-            } else { // set focus to the LinkBox tab
+            // Open LinkBox first to prevent closing the window
+            if(!hasLinkBox) {
+                const linkBoxTab = await chrome.tabs.create({ url: `${webProtocol}://${baseURL}` })
+                linkBoxTabId = linkBoxTab.id
+            } else {
+                // Set focus to the LinkBox tab
                 chrome.tabs.update(linkBoxTabId, { active: true })
+            }
+            
+            // Send links and store tab IDs for later closure upon confirmation
+            const requestId = await addLinks(links)
+            if (requestId && tabIds.length > 0) {
+                pendingTabClosures.set(requestId, tabIds)
             }
         } else if(ws.readyState === WebSocket.CLOSED) {
             chrome.notifications.create({
