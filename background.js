@@ -94,24 +94,38 @@ async function wsSendJSON(obj) {
     if (ws.readyState === WebSocket.OPEN) {
         const authToken = await getFromStorage('authToken')
         Object.assign(obj, { authToken: authToken }) // attach authToken to the send
-        // Generate a unique request ID for tracking confirmations
-        if (!obj.requestId && (obj.method === 'add-link' || obj.method === 'add-links')) {
-            obj.requestId = `${Date.now()}-${Math.random()}`
-        }
         ws.send(JSON.stringify(obj))
-        return obj.requestId
+        return true
     } else {
         console.log('wsSendJSON failed because WebSocket is not open')
-        return null
+        return false
     }
 }
 
-function addLink(title, link) {
-    return wsSendJSON({ method: 'add-link', payload: { title: title, link: link } })
+async function addLink(title, link, tabIds) {
+    const requestId = `${Date.now()}-${Math.random()}`
+    // Store tab IDs BEFORE sending to avoid race condition
+    if (tabIds && tabIds.length > 0) {
+        pendingTabClosures.set(requestId, tabIds)
+    }
+    const sent = await wsSendJSON({ method: 'add-link', payload: { title: title, link: link }, requestId: requestId })
+    // Clean up if send failed to prevent memory leak
+    if (!sent && tabIds && tabIds.length > 0) {
+        pendingTabClosures.delete(requestId)
+    }
 }
 
-function addLinks(linkArray) {
-    return wsSendJSON({ method: 'add-links', payload: linkArray })
+async function addLinks(linkArray, tabIds) {
+    const requestId = `${Date.now()}-${Math.random()}`
+    // Store tab IDs BEFORE sending to avoid race condition
+    if (tabIds && tabIds.length > 0) {
+        pendingTabClosures.set(requestId, tabIds)
+    }
+    const sent = await wsSendJSON({ method: 'add-links', payload: linkArray, requestId: requestId })
+    // Clean up if send failed to prevent memory leak
+    if (!sent && tabIds && tabIds.length > 0) {
+        pendingTabClosures.delete(requestId)
+    }
 }
 
 async function addLinksWhileOffline(links) {
@@ -220,11 +234,8 @@ function sendAllTabsToLinkBox() {
                 chrome.tabs.update(linkBoxTabId, { active: true })
             }
             
-            // Send links and store tab IDs for later closure upon confirmation
-            const requestId = await addLinks(links)
-            if (requestId && tabIds.length > 0) {
-                pendingTabClosures.set(requestId, tabIds)
-            }
+            // Send links with tab IDs for closure upon confirmation
+            addLinks(links, tabIds)
         } else if(ws.readyState === WebSocket.CLOSED) {
             chrome.notifications.create({
                 type : 'basic',
@@ -256,11 +267,8 @@ function sendCurrentTabToLinkBox() {
         }
 
         if(ws.readyState === WebSocket.OPEN) {
-            // Send link and store tab ID for later closure upon confirmation
-            const requestId = await addLink(link.title, link.link)
-            if (requestId) {
-                pendingTabClosures.set(requestId, [tab.id])
-            }
+            // Send link with tab ID for closure upon confirmation
+            addLink(link.title, link.link, [tab.id])
         } else if(ws.readyState === WebSocket.CLOSED) {
             chrome.notifications.create({
                 type : 'basic',
@@ -310,11 +318,8 @@ function sendAllTabsExceptCurrentTabToLinkBox() {
                 chrome.tabs.update(linkBoxTabId, { active: true })
             }
             
-            // Send links and store tab IDs for later closure upon confirmation
-            const requestId = await addLinks(links)
-            if (requestId && tabIds.length > 0) {
-                pendingTabClosures.set(requestId, tabIds)
-            }
+            // Send links with tab IDs for closure upon confirmation
+            addLinks(links, tabIds)
         } else if(ws.readyState === WebSocket.CLOSED) {
             chrome.notifications.create({
                 type : 'basic',
@@ -371,11 +376,8 @@ function sendTabsOnTheLeftToLinkBox() {
                 chrome.tabs.update(linkBoxTabId, { active: true })
             }
             
-            // Send links and store tab IDs for later closure upon confirmation
-            const requestId = await addLinks(links)
-            if (requestId && tabIds.length > 0) {
-                pendingTabClosures.set(requestId, tabIds)
-            }
+            // Send links with tab IDs for closure upon confirmation
+            addLinks(links, tabIds)
         } else if(ws.readyState === WebSocket.CLOSED) {
             chrome.notifications.create({
                 type : 'basic',
@@ -432,11 +434,8 @@ function sendTabsOnTheRightToLinkBox() {
                 chrome.tabs.update(linkBoxTabId, { active: true })
             }
             
-            // Send links and store tab IDs for later closure upon confirmation
-            const requestId = await addLinks(links)
-            if (requestId && tabIds.length > 0) {
-                pendingTabClosures.set(requestId, tabIds)
-            }
+            // Send links with tab IDs for closure upon confirmation
+            addLinks(links, tabIds)
         } else if(ws.readyState === WebSocket.CLOSED) {
             chrome.notifications.create({
                 type : 'basic',
