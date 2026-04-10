@@ -1,6 +1,6 @@
 {
     "name": "LinkBox",
-    "version": "1.0.7",
+    "version": "1.0.8",
     "description": "Web based alternative to OneTab",
     "manifest_version": 3,
     "permissions": [
@@ -26,6 +26,8 @@
         }
     },
     "icons": {
+        "16": "icon-large.png",
+        "48": "icon-large.png",
         "128": "icon-large.png"
     }
 }

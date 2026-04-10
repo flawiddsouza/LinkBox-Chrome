@@ -1,12 +1,77 @@
-import { ReconnectingWebSocket } from './reconnecting-websocket.js'
-
 const baseURL = 'linkbox.artelin.dev'
-const socketProtocol = 'wss'
 const webProtocol = 'https'
+const apiBaseURL = `${webProtocol}://${baseURL}`
+const tokenRefreshBufferMs = 60 * 1000
 
-const ws = new ReconnectingWebSocket(`${socketProtocol}://${baseURL}`)
+const contextMenuItems = [
+    {
+        id: 'LinkBox',
+        title: 'LinkBox',
+        contexts: ['all']
+    },
+    {
+        id: 'displayLinkBox',
+        title: 'Display LinkBox',
+        parentId: 'LinkBox',
+        contexts: ['all']
+    },
+    {
+        id: 'sendAllTabsToLinkBox',
+        title: 'Send all tabs to LinkBox',
+        parentId: 'LinkBox',
+        contexts: ['all']
+    },
+    {
+        id: 'sendWebLinkToLinkBox',
+        title: 'Send this web link to LinkBox',
+        parentId: 'LinkBox',
+        contexts: ['link']
+    },
+    {
+        id: 'separator1',
+        type: 'separator',
+        parentId: 'LinkBox',
+        contexts: ['all']
+    },
+    {
+        id: 'sendOnlyThisTabToLinkBox',
+        title: 'Send only this tab to LinkBox',
+        parentId: 'LinkBox',
+        contexts: ['all']
+    },
+    {
+        id: 'sendAllTabsExceptThisTabToLinkBox',
+        title: 'Send all tabs except this tab to LinkBox',
+        parentId: 'LinkBox',
+        contexts: ['all']
+    },
+    {
+        id: 'sendTabsOnTheLeftToLinkBox',
+        title: 'Send tabs on the left to LinkBox',
+        parentId: 'LinkBox',
+        contexts: ['all']
+    },
+    {
+        id: 'sendTabsOnTheRightToLinkBox',
+        title: 'Send tabs on the right to LinkBox',
+        parentId: 'LinkBox',
+        contexts: ['all']
+    },
+    {
+        id: 'LogoutSeparator',
+        type: 'separator',
+        parentId: 'LinkBox',
+        contexts: ['action']
+    },
+    {
+        id: 'Logout',
+        title: 'Logout',
+        parentId: 'LinkBox',
+        contexts: ['action']
+    }
+]
 
-auth()
+let loginPromise = null
 
 function isStorageAvailable() {
     return typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local
@@ -18,12 +83,14 @@ async function getFromStorage(key) {
     }
     return (await chrome.storage.local.get([key]))[key]
 }
+
 async function setInStorage(key, value) {
     if (!isStorageAvailable()) {
         throw new Error('chrome.storage.local is not available in this context.')
     }
     await chrome.storage.local.set({ [key]: value })
 }
+
 async function clearStorage() {
     if (!isStorageAvailable()) {
         throw new Error('chrome.storage.local is not available in this context.')
@@ -31,106 +98,45 @@ async function clearStorage() {
     await chrome.storage.local.clear()
 }
 
-let linksAddedWhileOffline = []
-;(async () => {
-    try {
-        const storedLinks = await getFromStorage('linksAddedWhileOffline')
-        if (storedLinks) {
-            linksAddedWhileOffline = JSON.parse(storedLinks)
-        } else {
-            await setInStorage('linksAddedWhileOffline', JSON.stringify(linksAddedWhileOffline))
-        }
-    } catch (err) {
-        console.error('Storage error:', err)
+function showNotification(title, message) {
+    chrome.notifications.create({
+        type: 'basic',
+        iconUrl: 'icon-large.png',
+        title: title,
+        message: message
+    })
+}
+
+function parseJwtPayload(token) {
+    if (!token) {
+        return null
     }
-})()
 
-// Store pending tab closures waiting for confirmation
-const pendingTabClosures = new Map()
-
-ws.addEventListener('message', e => {
     try {
-        var receivedJSON = JSON.parse(e.data)
-        var event = receivedJSON.event
-        var payload = receivedJSON.payload
-        if(event) {
-            switch(event) {
-                case 'need-valid-token':
-                    onNeedValidToken(payload)
-                    break
-                case 'link-added':
-                case 'links-added':
-                    onLinksAdded(payload)
-                    break
-            }
+        const tokenParts = token.split('.')
+        if (tokenParts.length < 2) {
+            return null
         }
-    } catch(err) {
-        if(err instanceof SyntaxError) {
-            console.log('Invalid JSON received:', e.data)
-        } else {
-            console.log(err)
-        }
-    }
-})
 
-function onLinksAdded(payload) {
-    // When we get confirmation that links were added, close the tabs
-    if (payload && payload.requestId && pendingTabClosures.has(payload.requestId)) {
-        const tabIds = pendingTabClosures.get(payload.requestId)
-        chrome.tabs.remove(tabIds)
-        pendingTabClosures.delete(payload.requestId)
+        const normalizedPayload = tokenParts[1]
+            .replace(/-/g, '+')
+            .replace(/_/g, '/')
+        const paddedPayload = normalizedPayload.padEnd(Math.ceil(normalizedPayload.length / 4) * 4, '=')
+
+        return JSON.parse(atob(paddedPayload))
+    } catch (error) {
+        console.log('Failed to parse auth token payload', error)
+        return null
     }
 }
 
-function onNeedValidToken(payload) {
-    if(payload) {
-        loginUser(() => wsSendJSON(payload))
-    } else {
-        loginUser()
-    }
-}
-
-async function wsSendJSON(obj) {
-    if (ws.readyState === WebSocket.OPEN) {
-        const authToken = await getFromStorage('authToken')
-        Object.assign(obj, { authToken: authToken }) // attach authToken to the send
-        ws.send(JSON.stringify(obj))
-        return true
-    } else {
-        console.log('wsSendJSON failed because WebSocket is not open')
+function isTokenFresh(token) {
+    const payload = parseJwtPayload(token)
+    if (!payload || !payload.exp) {
         return false
     }
-}
 
-async function addLink(title, link, tabIds) {
-    const requestId = `${Date.now()}-${Math.random()}`
-    // Store tab IDs BEFORE sending to avoid race condition
-    if (tabIds && tabIds.length > 0) {
-        pendingTabClosures.set(requestId, tabIds)
-    }
-    const sent = await wsSendJSON({ method: 'add-link', payload: { title: title, link: link }, requestId: requestId })
-    // Clean up if send failed to prevent memory leak
-    if (!sent && tabIds && tabIds.length > 0) {
-        pendingTabClosures.delete(requestId)
-    }
-}
-
-async function addLinks(linkArray, tabIds) {
-    const requestId = `${Date.now()}-${Math.random()}`
-    // Store tab IDs BEFORE sending to avoid race condition
-    if (tabIds && tabIds.length > 0) {
-        pendingTabClosures.set(requestId, tabIds)
-    }
-    const sent = await wsSendJSON({ method: 'add-links', payload: linkArray, requestId: requestId })
-    // Clean up if send failed to prevent memory leak
-    if (!sent && tabIds && tabIds.length > 0) {
-        pendingTabClosures.delete(requestId)
-    }
-}
-
-async function addLinksWhileOffline(links) {
-    linksAddedWhileOffline.push(links)
-    await setInStorage('linksAddedWhileOffline', JSON.stringify(linksAddedWhileOffline))
+    return (payload.exp * 1000) - Date.now() > tokenRefreshBufferMs
 }
 
 async function auth(openLogin = true) {
@@ -139,521 +145,452 @@ async function auth(openLogin = true) {
 
     if (!username || !password) {
         if (openLogin) {
-            chrome.tabs.create({ url: 'login.html' })
+            await createTab({ url: 'login.html' })
         }
         return false
-    } else {
-        return true
     }
+
+    return true
 }
 
-async function loginUser(callback = null) {
+async function loginUser() {
     if (!(await auth())) {
-        return
+        return null
     }
+
     const username = await getFromStorage('username')
     const password = await getFromStorage('password')
 
-    fetch(`${webProtocol}://${baseURL}/authenticate`, {
-        method: 'post',
-        headers: {
-            'Accept': 'application/json',
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ username: username, password: password })
-    })
-    .then(res => res.json())
-    .then(async res => {
-        if (res.success) {
-            await setInStorage('authToken', res.token)
-            if (callback) {
-                callback()
-            }
-        } else {
-            this.authError = res.message
-            chrome.notifications.create({
-                type : 'basic',
-                iconUrl: 'icon-large.png',
-                title: 'Error',
-                message: res.message
-            })
-        }
-    })
-}
-
-function displayLinkBox() {
-    var hasLinkBox = false
-    var linkBoxTabId = null
-    var linkBoxWindowId = null
-    chrome.tabs.query({}, tabs => {
-        tabs.forEach(tab => {
-            if(RegExp(`${baseURL}.*`).test(tab.url)) {
-                hasLinkBox = true
-                linkBoxTabId = tab.id
-                linkBoxWindowId = tab.windowId
-            }
+    try {
+        const response = await fetch(`${apiBaseURL}/authenticate`, {
+            method: 'post',
+            headers: {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ username: username, password: password })
         })
-        if(!hasLinkBox) { // open tab only if LinkBox isn't open in any tab
-            chrome.tabs.create({ url: `${webProtocol}://${baseURL}` })
-        } else { // set focus to the LinkBox tab
-            chrome.tabs.update(linkBoxTabId, { active: true })
-            chrome.windows.update(linkBoxWindowId, { focused: true })
+        const responseBody = await response.json()
+
+        if (responseBody.success) {
+            await setInStorage('authToken', responseBody.token)
+            return responseBody.token
         }
+
+        showNotification('Error', responseBody.message)
+        return null
+    } catch (error) {
+        console.log('loginUser failed', error)
+        showNotification('Error', 'LinkBox server is offline')
+        return null
+    }
+}
+
+async function ensureFreshAuthToken(forceRefresh = false) {
+    if (!(await auth())) {
+        return null
+    }
+
+    const authToken = await getFromStorage('authToken')
+    if (!forceRefresh && isTokenFresh(authToken)) {
+        return authToken
+    }
+
+    if (loginPromise) {
+        return loginPromise
+    }
+
+    loginPromise = loginUser()
+        .catch(error => {
+            console.log('loginUser failed', error)
+            return null
+        })
+        .finally(() => {
+            loginPromise = null
+        })
+
+    return loginPromise
+}
+
+async function postWithAuth(path, body, allowRetry = true) {
+    const authToken = await ensureFreshAuthToken()
+    if (!authToken) {
+        return null
+    }
+
+    try {
+        const response = await fetch(`${apiBaseURL}${path}`, {
+            method: 'post',
+            headers: {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json',
+                'authToken': authToken
+            },
+            body: JSON.stringify(body)
+        })
+
+        if (response.status === 401 && allowRetry) {
+            const freshToken = await ensureFreshAuthToken(true)
+            if (!freshToken) {
+                return null
+            }
+            return postWithAuth(path, body, false)
+        }
+
+        let responseBody = null
+        try {
+            responseBody = await response.json()
+        } catch (error) {
+            responseBody = null
+        }
+
+        if (!response.ok || (responseBody && responseBody.success === false)) {
+            showNotification('Error', responseBody && responseBody.message ? responseBody.message : `Request failed (${response.status})`)
+            return null
+        }
+
+        return responseBody || { success: true }
+    } catch (error) {
+        console.log('postWithAuth failed', error)
+        showNotification('Error', 'LinkBox server is offline')
+        return null
+    }
+}
+
+async function addLink(link) {
+    return postWithAuth('/extension/add-link', link)
+}
+
+async function addLinks(links) {
+    return postWithAuth('/extension/add-links', { links: links })
+}
+
+function isLinkBoxUrl(url = '') {
+    return url.startsWith(apiBaseURL)
+}
+
+function isChromeUrl(url = '') {
+    return /^chrome/i.test(url)
+}
+
+function isSavableTab(tab) {
+    return Boolean(tab && typeof tab.id !== 'undefined' && tab.url && !isLinkBoxUrl(tab.url) && !isChromeUrl(tab.url))
+}
+
+function toLinkPayload(tab) {
+    return {
+        title: tab.title,
+        link: tab.url
+    }
+}
+
+function queryTabs(queryInfo) {
+    return new Promise(resolve => {
+        chrome.tabs.query(queryInfo, resolve)
     })
 }
 
-function sendAllTabsToLinkBox() {
-    if(!auth()) {
+function createTab(createProperties) {
+    return new Promise(resolve => {
+        chrome.tabs.create(createProperties, resolve)
+    })
+}
+
+function updateTab(tabId, updateProperties) {
+    return new Promise(resolve => {
+        chrome.tabs.update(tabId, updateProperties, resolve)
+    })
+}
+
+function updateWindow(windowId, updateInfo) {
+    return new Promise(resolve => {
+        chrome.windows.update(windowId, updateInfo, resolve)
+    })
+}
+
+function removeTabs(tabIds) {
+    return new Promise(resolve => {
+        chrome.tabs.remove(tabIds, () => resolve())
+    })
+}
+
+function removeAllContextMenus() {
+    return new Promise(resolve => {
+        chrome.contextMenus.removeAll(() => resolve())
+    })
+}
+
+function createContextMenu(createProperties) {
+    return new Promise(resolve => {
+        chrome.contextMenus.create(createProperties, () => resolve())
+    })
+}
+
+async function initializeContextMenus() {
+    await removeAllContextMenus()
+    for (const item of contextMenuItems) {
+        await createContextMenu(item)
+    }
+}
+
+async function warmUpSession() {
+    try {
+        if (await auth(false)) {
+            await ensureFreshAuthToken()
+        }
+    } catch (error) {
+        console.log('warmUpSession failed', error)
+    }
+}
+
+async function displayLinkBox() {
+    const tabs = await queryTabs({})
+    const linkBoxTab = tabs.find(tab => isLinkBoxUrl(tab.url))
+
+    if (!linkBoxTab) {
+        await createTab({ url: apiBaseURL })
         return
     }
 
-    chrome.tabs.query({ currentWindow: true }, async tabs => {
-        var links = []
-        var tabIds = []
-        var hasLinkBox = false
-        var linkBoxTabId = null
-
-        tabs.forEach(tab => {
-            if(!RegExp(`${baseURL}.*`).test(tab.url) && !RegExp(/^chrome.*/).test(tab.url)) { // we avoid adding & closing LinkBox if it's open in the window
-                links.push({ title: tab.title, link: tab.url })
-                tabIds.push(tab.id)
-            }
-            if(RegExp(`${baseURL}.*`).test(tab.url)) {
-                hasLinkBox = true
-                linkBoxTabId = tab.id
-            }
-        })
-
-        if(ws.readyState === WebSocket.OPEN) {
-            // Open LinkBox first to prevent closing the window
-            if(!hasLinkBox) {
-                const linkBoxTab = await chrome.tabs.create({ url: `${webProtocol}://${baseURL}` })
-                linkBoxTabId = linkBoxTab.id
-            } else {
-                // Set focus to the LinkBox tab
-                chrome.tabs.update(linkBoxTabId, { active: true })
-            }
-            
-            // Send links with tab IDs for closure upon confirmation
-            addLinks(links, tabIds)
-        } else if(ws.readyState === WebSocket.CLOSED) {
-            chrome.notifications.create({
-                type : 'basic',
-                iconUrl: 'icon-large.png',
-                title: 'Error',
-                message: 'LinkBox server is offline'
-            })
-            // addLinksWhileOffline(links)
-            // chrome.tabs.remove(tabIds)
-        } else {
-            console.log('WebSocket is in state CONNECTING or CLOSING')
-        }
-    })
+    await updateTab(linkBoxTab.id, { active: true })
+    await updateWindow(linkBoxTab.windowId, { focused: true })
 }
 
-function sendCurrentTabToLinkBox() {
-    if(!auth()) {
+async function openOrFocusLinkBoxTab(tabs) {
+    const linkBoxTab = tabs.find(tab => isLinkBoxUrl(tab.url))
+
+    if (!linkBoxTab) {
+        const createdTab = await createTab({ url: apiBaseURL })
+        return createdTab ? createdTab.id : null
+    }
+
+    await updateTab(linkBoxTab.id, { active: true })
+    await updateWindow(linkBoxTab.windowId, { focused: true })
+    return linkBoxTab.id
+}
+
+async function sendAllTabsToLinkBox() {
+    if (!(await auth())) {
         return
     }
 
-    chrome.tabs.query({ currentWindow: true, active: true }, async tabs => {
-        var tab = tabs[0]
-        var link = {}
+    const tabs = await queryTabs({ currentWindow: true })
+    const savableTabs = tabs.filter(isSavableTab)
 
-        if(!RegExp(`${baseURL}.*`).test(tab.url) && !RegExp(/^chrome.*/).test(tab.url)) { // we avoid adding & closing LinkBox if it's open in the window
-            link = { title: tab.title, link: tab.url }
-        } else {
-            return
-        }
-
-        if(ws.readyState === WebSocket.OPEN) {
-            // Send link with tab ID for closure upon confirmation
-            addLink(link.title, link.link, [tab.id])
-        } else if(ws.readyState === WebSocket.CLOSED) {
-            chrome.notifications.create({
-                type : 'basic',
-                iconUrl: 'icon-large.png',
-                title: 'Error',
-                message: 'LinkBox server is offline'
-            })
-            // addLinksWhileOffline([link])
-            // chrome.tabs.remove(tab.id)
-        } else {
-            console.log('WebSocket is in state CONNECTING or CLOSING')
-        }
-    })
-}
-
-function sendAllTabsExceptCurrentTabToLinkBox() {
-    if(!auth()) {
+    if (savableTabs.length === 0) {
         return
     }
 
-    chrome.tabs.query({ currentWindow: true }, async tabs => {
-        var links = []
-        var tabIds = []
-        var hasLinkBox = false
-        var linkBoxTabId = null
+    await openOrFocusLinkBoxTab(tabs)
 
-        tabs.forEach(tab => {
-            if(!tab.active) {
-                if(!RegExp(`${baseURL}.*`).test(tab.url) && !RegExp(/^chrome.*/).test(tab.url)) { // we avoid adding & closing LinkBox if it's open in the window
-                    links.push({ title: tab.title, link: tab.url })
-                    tabIds.push(tab.id)
-                }
-            }
-            if(RegExp(`${baseURL}.*`).test(tab.url)) {
-                hasLinkBox = true
-                linkBoxTabId = tab.id
-            }
-        })
-
-        if(ws.readyState === WebSocket.OPEN) {
-            // Open LinkBox first to prevent closing the window
-            if(!hasLinkBox) {
-                const linkBoxTab = await chrome.tabs.create({ url: `${webProtocol}://${baseURL}` })
-                linkBoxTabId = linkBoxTab.id
-            } else {
-                // Set focus to the LinkBox tab
-                chrome.tabs.update(linkBoxTabId, { active: true })
-            }
-            
-            // Send links with tab IDs for closure upon confirmation
-            addLinks(links, tabIds)
-        } else if(ws.readyState === WebSocket.CLOSED) {
-            chrome.notifications.create({
-                type : 'basic',
-                iconUrl: 'icon-large.png',
-                title: 'Error',
-                message: 'LinkBox server is offline'
-            })
-            // addLinksWhileOffline(links)
-            // chrome.tabs.remove(tabIds)
-        } else {
-            console.log('WebSocket is in state CONNECTING or CLOSING')
-        }
-    })
+    const result = await addLinks(savableTabs.map(toLinkPayload))
+    if (result) {
+        await removeTabs(savableTabs.map(tab => tab.id))
+    }
 }
 
-function sendTabsOnTheLeftToLinkBox() {
-    if(!auth()) {
+async function sendCurrentTabToLinkBox() {
+    if (!(await auth())) {
         return
     }
 
-    chrome.tabs.query({ currentWindow: true }, async tabs => {
-        var links = []
-        var tabIds = []
-        var hasLinkBox = false
-        var linkBoxTabId = null
+    const tabs = await queryTabs({ currentWindow: true, active: true })
+    const tab = tabs[0]
 
-        var currentTabIndex = null
-        tabs.forEach((tab, index) => {
-            if(tab.active) {
-                currentTabIndex = index
-            }
-        })
-
-        tabs.forEach((tab, index) => {
-            if(index < currentTabIndex) {
-                if(!RegExp(`${baseURL}.*`).test(tab.url) && !RegExp(/^chrome.*/).test(tab.url)) { // we avoid adding & closing LinkBox if it's open in the window
-                    links.push({ title: tab.title, link: tab.url })
-                    tabIds.push(tab.id)
-                }
-            }
-            if(RegExp(`${baseURL}.*`).test(tab.url)) {
-                hasLinkBox = true
-                linkBoxTabId = tab.id
-            }
-        })
-
-        if(ws.readyState === WebSocket.OPEN) {
-            // Open LinkBox first to prevent closing the window
-            if(!hasLinkBox) {
-                const linkBoxTab = await chrome.tabs.create({ url: `${webProtocol}://${baseURL}` })
-                linkBoxTabId = linkBoxTab.id
-            } else {
-                // Set focus to the LinkBox tab
-                chrome.tabs.update(linkBoxTabId, { active: true })
-            }
-            
-            // Send links with tab IDs for closure upon confirmation
-            addLinks(links, tabIds)
-        } else if(ws.readyState === WebSocket.CLOSED) {
-            chrome.notifications.create({
-                type : 'basic',
-                iconUrl: 'icon-large.png',
-                title: 'Error',
-                message: 'LinkBox server is offline'
-            })
-            // addLinksWhileOffline(links)
-            // chrome.tabs.remove(tabIds)
-        } else {
-            console.log('WebSocket is in state CONNECTING or CLOSING')
-        }
-    })
-}
-
-function sendTabsOnTheRightToLinkBox() {
-    if(!auth()) {
+    if (!isSavableTab(tab)) {
         return
     }
 
-    chrome.tabs.query({ currentWindow: true }, async tabs => {
-        var links = []
-        var tabIds = []
-        var hasLinkBox = false
-        var linkBoxTabId = null
+    const currentWindowTabs = await queryTabs({ currentWindow: true })
+    await openOrFocusLinkBoxTab(currentWindowTabs)
 
-        var currentTabIndex = null
-        tabs.forEach((tab, index) => {
-            if(tab.active) {
-                currentTabIndex = index
-            }
-        })
+    const result = await addLink(toLinkPayload(tab))
+    if (result) {
+        await removeTabs(tab.id)
+    }
+}
 
-        tabs.forEach((tab, index) => {
-            if(index > currentTabIndex) {
-                if(!RegExp(`${baseURL}.*`).test(tab.url) && !RegExp(/^chrome.*/).test(tab.url)) { // we avoid adding & closing LinkBox if it's open in the window
-                    links.push({ title: tab.title, link: tab.url })
-                    tabIds.push(tab.id)
-                }
-            }
-            if(RegExp(`${baseURL}.*`).test(tab.url)) {
-                hasLinkBox = true
-                linkBoxTabId = tab.id
-            }
-        })
+async function sendAllTabsExceptCurrentTabToLinkBox() {
+    if (!(await auth())) {
+        return
+    }
 
-        if(ws.readyState === WebSocket.OPEN) {
-            // Open LinkBox first to prevent closing the window
-            if(!hasLinkBox) {
-                const linkBoxTab = await chrome.tabs.create({ url: `${webProtocol}://${baseURL}` })
-                linkBoxTabId = linkBoxTab.id
-            } else {
-                // Set focus to the LinkBox tab
-                chrome.tabs.update(linkBoxTabId, { active: true })
-            }
-            
-            // Send links with tab IDs for closure upon confirmation
-            addLinks(links, tabIds)
-        } else if(ws.readyState === WebSocket.CLOSED) {
-            chrome.notifications.create({
-                type : 'basic',
-                iconUrl: 'icon-large.png',
-                title: 'Error',
-                message: 'LinkBox server is offline'
-            })
-            // addLinksWhileOffline(links)
-            // chrome.tabs.remove(tabIds)
-        } else {
-            console.log('WebSocket is in state CONNECTING or CLOSING')
-        }
+    const tabs = await queryTabs({ currentWindow: true })
+    const savableTabs = tabs.filter(tab => !tab.active && isSavableTab(tab))
+
+    if (savableTabs.length === 0) {
+        return
+    }
+
+    await openOrFocusLinkBoxTab(tabs)
+
+    const result = await addLinks(savableTabs.map(toLinkPayload))
+    if (result) {
+        await removeTabs(savableTabs.map(tab => tab.id))
+    }
+}
+
+async function sendTabsOnTheLeftToLinkBox() {
+    if (!(await auth())) {
+        return
+    }
+
+    const tabs = await queryTabs({ currentWindow: true })
+    const currentTabIndex = tabs.findIndex(tab => tab.active)
+    const savableTabs = tabs.filter((tab, index) => index < currentTabIndex && isSavableTab(tab))
+
+    if (savableTabs.length === 0) {
+        return
+    }
+
+    await openOrFocusLinkBoxTab(tabs)
+
+    const result = await addLinks(savableTabs.map(toLinkPayload))
+    if (result) {
+        await removeTabs(savableTabs.map(tab => tab.id))
+    }
+}
+
+async function sendTabsOnTheRightToLinkBox() {
+    if (!(await auth())) {
+        return
+    }
+
+    const tabs = await queryTabs({ currentWindow: true })
+    const currentTabIndex = tabs.findIndex(tab => tab.active)
+    const savableTabs = tabs.filter((tab, index) => index > currentTabIndex && isSavableTab(tab))
+
+    if (savableTabs.length === 0) {
+        return
+    }
+
+    await openOrFocusLinkBoxTab(tabs)
+
+    const result = await addLinks(savableTabs.map(toLinkPayload))
+    if (result) {
+        await removeTabs(savableTabs.map(tab => tab.id))
+    }
+}
+
+async function sendWebLinkToLinkBox(info) {
+    if (!(await auth())) {
+        return
+    }
+
+    if (!info.linkUrl || isLinkBoxUrl(info.linkUrl) || isChromeUrl(info.linkUrl)) {
+        return
+    }
+
+    await addLink({
+        title: info.linkText || info.linkUrl,
+        link: info.linkUrl
     })
 }
 
-function handleTabChange() {
-    chrome.tabs.query({ currentWindow: true }, tabs => {
-        if(tabs.length == 1) {
-            chrome.contextMenus.update('sendAllTabsExceptThisTabToLinkBox', { enabled: false })
-            chrome.contextMenus.update('sendTabsOnTheLeftToLinkBox', { enabled: false })
-            chrome.contextMenus.update('sendTabsOnTheRightToLinkBox', { enabled: false })
-            if(RegExp(`${baseURL}.*`).test(tabs[0].url) || RegExp(/^chrome.*/).test(tabs[0].url)) {
-                chrome.contextMenus.update('sendAllTabsToLinkBox', { enabled: false })
-                chrome.contextMenus.update('sendOnlyThisTabToLinkBox', { enabled: false })
-            } else {
-                chrome.contextMenus.update('sendAllTabsToLinkBox', { enabled: true })
-                chrome.contextMenus.update('sendOnlyThisTabToLinkBox', { enabled: true })
-            }
-        } else {
-            chrome.contextMenus.update('sendAllTabsExceptThisTabToLinkBox', { enabled: true })
-            chrome.contextMenus.update('sendTabsOnTheLeftToLinkBox', { enabled: true })
-            chrome.contextMenus.update('sendTabsOnTheRightToLinkBox', { enabled: true })
-        }
-        var currentTabIndex = null
-        var tabOnLeft = false
-        var tabOnRight = false
-        tabs.forEach((tab, index) => {
-            if(tab.active) {
-                currentTabIndex = index
-            }
-        })
-        if(currentTabIndex) {
-            tabs.forEach((tab, index) => {
-                if(index === currentTabIndex - 1) {
-                    tabOnLeft = true
-                    // console.log('There\'s a tab on the left')
-                }
-                if(index === currentTabIndex + 1) {
-                    tabOnRight = true
-                    // console.log('There\'s a tab on the right')
-                }
-            })
-            if(!tabOnLeft) {
-                chrome.contextMenus.update('sendTabsOnTheLeftToLinkBox', { enabled: false })
-            } else {
-                chrome.contextMenus.update('sendTabsOnTheLeftToLinkBox', { enabled: true })
-            }
-            if(!tabOnRight) {
-                chrome.contextMenus.update('sendTabsOnTheRightToLinkBox', { enabled: false })
-            } else {
-                chrome.contextMenus.update('sendTabsOnTheRightToLinkBox', { enabled: true })
-            }
-        }
-    })
+async function handleTabChange() {
+    const tabs = await queryTabs({ currentWindow: true })
+    const currentTabIndex = tabs.findIndex(tab => tab.active)
+    const savableTabs = tabs.filter(isSavableTab)
+
+    chrome.contextMenus.update('sendAllTabsToLinkBox', { enabled: savableTabs.length > 0 })
+    chrome.contextMenus.update('sendOnlyThisTabToLinkBox', { enabled: currentTabIndex !== -1 && isSavableTab(tabs[currentTabIndex]) })
+    chrome.contextMenus.update('sendAllTabsExceptThisTabToLinkBox', { enabled: savableTabs.some(tab => !tab.active) })
+
+    if (currentTabIndex === -1) {
+        chrome.contextMenus.update('sendTabsOnTheLeftToLinkBox', { enabled: false })
+        chrome.contextMenus.update('sendTabsOnTheRightToLinkBox', { enabled: false })
+        return
+    }
+
+    const hasSavableTabOnTheLeft = tabs.some((tab, index) => index < currentTabIndex && isSavableTab(tab))
+    const hasSavableTabOnTheRight = tabs.some((tab, index) => index > currentTabIndex && isSavableTab(tab))
+
+    chrome.contextMenus.update('sendTabsOnTheLeftToLinkBox', { enabled: hasSavableTabOnTheLeft })
+    chrome.contextMenus.update('sendTabsOnTheRightToLinkBox', { enabled: hasSavableTabOnTheRight })
 }
 
-async function setupLogoutContextMenu() {
-    chrome.contextMenus.create({
-        id: 'LogoutSeparator',
-        type: 'separator',
-        parentId: 'LinkBox',
-        contexts: ['action']
-    })
+chrome.runtime.onInstalled.addListener(() => {
+    void (async () => {
+        await initializeContextMenus()
+        await handleTabChange()
+        await warmUpSession()
+    })()
+})
 
-    chrome.contextMenus.create({
-        id: 'Logout',
-        title: 'Logout',
-        parentId: 'LinkBox',
-        contexts: ['action']
-    })
-}
-
-function removeLogoutContextMenus() {
-    chrome.contextMenus.remove('LogoutSeparator')
-    chrome.contextMenus.remove('Logout')
-}
+chrome.runtime.onStartup.addListener(() => {
+    void (async () => {
+        await handleTabChange()
+        await warmUpSession()
+    })()
+})
 
 chrome.commands.onCommand.addListener(command => {
-    switch(command) {
+    switch (command) {
         case 'display-linkbox':
-            displayLinkBox()
+            void displayLinkBox()
             break
         case 'send-current-tab-to-linkbox':
-            sendCurrentTabToLinkBox()
+            void sendCurrentTabToLinkBox()
+            break
+        default:
             break
     }
 })
 
-chrome.action.onClicked.addListener(activeTab => sendAllTabsToLinkBox())
-
-chrome.contextMenus.removeAll()
-
-chrome.contextMenus.create({
-    id: 'LinkBox',
-    title: 'LinkBox',
-    contexts: ['all']
+chrome.action.onClicked.addListener(() => {
+    void sendAllTabsToLinkBox()
 })
 
-chrome.contextMenus.create({
-    id: 'displayLinkBox',
-    title: 'Display LinkBox',
-    parentId: 'LinkBox',
-    contexts: ['all']
+chrome.tabs.onActivated.addListener(() => {
+    void handleTabChange()
 })
 
-chrome.contextMenus.create({
-    id: 'sendAllTabsToLinkBox',
-    title: 'Send all tabs to LinkBox',
-    parentId: 'LinkBox',
-    contexts: ['all']
+chrome.tabs.onMoved.addListener(() => {
+    void handleTabChange()
 })
 
-chrome.contextMenus.create({
-    id: 'sendWebLinkToLinkBox',
-    title: 'Send this web link to LinkBox',
-    parentId: 'LinkBox',
-    contexts: ['link']
+chrome.tabs.onRemoved.addListener(() => {
+    void handleTabChange()
 })
 
-chrome.contextMenus.create({
-    id: 'separator1',
-    type: 'separator',
-    parentId: 'LinkBox',
-    contexts: ['all']
+chrome.tabs.onUpdated.addListener(() => {
+    void handleTabChange()
 })
 
-chrome.contextMenus.create({
-    id: 'sendOnlyThisTabToLinkBox',
-    title: 'Send only this tab to LinkBox',
-    parentId: 'LinkBox',
-    contexts: ['all']
-})
-
-chrome.contextMenus.create({
-    id: 'sendAllTabsExceptThisTabToLinkBox',
-    title: 'Send all tabs except this tab to LinkBox',
-    parentId: 'LinkBox',
-    contexts: ['all']
-})
-
-chrome.contextMenus.create({
-    id: 'sendTabsOnTheLeftToLinkBox',
-    title: 'Send tabs on the left to LinkBox',
-    parentId: 'LinkBox',
-    contexts: ['all']
-})
-
-chrome.contextMenus.create({
-    id: 'sendTabsOnTheRightToLinkBox',
-    title: 'Send tabs on the right to LinkBox',
-    parentId: 'LinkBox',
-    contexts: ['all']
-})
-
-if(auth(false)) {
-    setupLogoutContextMenu()
-}
-
-chrome.tabs.onActivated.addListener(activeInfo => handleTabChange())
-chrome.tabs.onMoved.addListener(tabId => handleTabChange())
-chrome.tabs.onRemoved.addListener(tabId => handleTabChange())
-
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if(request.message == 'loggedIn') {
-        chrome.notifications.create({
-            type : 'basic',
-            iconUrl: 'icon-large.png',
-            title: 'Success',
-            message: 'Logged in'
-        })
-
-        setupLogoutContextMenu()
+chrome.runtime.onMessage.addListener(request => {
+    if (request.message === 'loggedIn') {
+        showNotification('Success', 'Logged in')
+        void warmUpSession()
     }
 })
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
     switch (info.menuItemId) {
         case 'displayLinkBox':
-            displayLinkBox()
+            void displayLinkBox()
             break
         case 'sendAllTabsToLinkBox':
-            sendAllTabsToLinkBox()
+            void sendAllTabsToLinkBox()
             break
         case 'sendWebLinkToLinkBox':
-            console.log(info)
+            void sendWebLinkToLinkBox(info, tab)
             break
         case 'sendOnlyThisTabToLinkBox':
-            sendCurrentTabToLinkBox()
+            void sendCurrentTabToLinkBox()
             break
         case 'sendAllTabsExceptThisTabToLinkBox':
-            sendAllTabsExceptCurrentTabToLinkBox()
+            void sendAllTabsExceptCurrentTabToLinkBox()
             break
         case 'sendTabsOnTheLeftToLinkBox':
-            sendTabsOnTheLeftToLinkBox()
+            void sendTabsOnTheLeftToLinkBox()
             break
         case 'sendTabsOnTheRightToLinkBox':
-            sendTabsOnTheRightToLinkBox()
+            void sendTabsOnTheRightToLinkBox()
             break
         case 'Logout':
-            (async () => {
+            void (async () => {
                 await clearStorage()
-                chrome.notifications.create({
-                    type : 'basic',
-                    iconUrl: 'icon-large.png',
-                    title: 'Success',
-                    message: 'Logged out'
-                })
-                removeLogoutContextMenus()
+                showNotification('Success', 'Logged out')
             })()
             break
         default:
